@@ -5,4 +5,7 @@
     { "path": "./tsconfig.node.json" }
   ],
   "strictMode": false,
+  "compilerOptions": {
+    "jsx": "react"  // or "react-jsx" if using React 17+ with automatic JSX runtime
+  }  
 }
