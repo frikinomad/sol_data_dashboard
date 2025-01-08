@@ -1,10 +1,14 @@
-import { Connection, clusterApiUrl } from "@solana/web3.js";
+import { Connection, clusterApiUrl, PublicKey  } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+
+import { Buffer } from 'buffer';
+window.Buffer = Buffer;
 
 // const network = "mainnet-beta"
-const network = "devnet"
-const connection = new Connection(clusterApiUrl(network), "confirmed");
+// const network = "devnet"
+// const connection = new Connection(clusterApiUrl(network), "confirmed");
 
-export const fetchLatestBlock = async () => {
+export const fetchLatestBlock = async (connection) => {
   try {
     const blockHeight = await connection.getBlockHeight();
     const block = await connection.getBlock(blockHeight, { maxSupportedTransactionVersion: 0 });
@@ -15,7 +19,7 @@ export const fetchLatestBlock = async () => {
   }
 };
 
-export const fetchEpochInfo = async () => {
+export const fetchEpochInfo = async (connection) => {
   try {
     const epochInfo = await connection.getEpochInfo();
     return {
@@ -29,27 +33,27 @@ export const fetchEpochInfo = async () => {
 };
 
 // Websocket
-export const subscribeToSlotChanges = (callback) => {
+export const subscribeToSlotChanges = (callback, connection) => {
     const subscriptionId = connection.onSlotChange((slotInfo) => {
       callback(slotInfo);
     });
     return () => connection.removeSlotChangeListener(subscriptionId);
 };
 
-export const fetchNetworkStatistics = async () => {
+export const fetchNetworkStatistics = async (connection) => {
   try {
     // Fetch active nodes
     const clusterNodes = await connection.getClusterNodes();
     const activeNodes = clusterNodes.length; // Each entry in clusterNodes represents an active node
 
-    return { totalBlocks, activeNodes };
+    return { activeNodes };
   } catch (error) {
     console.error("Error fetching network statistics:", error);
     throw error;
   }
 };
 
-export const fetchTransactionMetrics = async () => {
+export const fetchTransactionMetrics = async (connection) => {
   try {
     // Fetch transaction count (total transactions processed on the network)
     const txnCount = await connection.getTransactionCount();
@@ -70,27 +74,7 @@ export const fetchTransactionMetrics = async () => {
   }
 };
 
-export const fetchValidatorPerformance = async () => {
-  try {
-    // Fetch all validator information
-    const validators = await connection.getVoteAccounts();
-
-    // Process data for current validators
-    const validatorStats = validators.current.map((validator) => ({
-      pubkey: validator.votePubkey,
-      uptime: (validator.activatedStake > 0 ? (validator.lastVote / validator.rootSlot) : 0).toFixed(2),
-      skippedSlots: validator.rootSlot - validator.lastVote,
-      rewards: validator.commission, // Commission is a proxy for validator rewards in % terms
-    }));
-
-    return validatorStats;
-  } catch (error) {
-    console.error("Error fetching validator performance:", error);
-    throw error;
-  }
-};
-
-export const fetchGasFeesMetrics = async () => {
+export const fetchGasFeesMetrics = async (connection) => {
   try {
     // Fetch recent block data to calculate average fees
     const recentBlockSlot = await connection.getSlot();
@@ -116,7 +100,7 @@ export const fetchGasFeesMetrics = async () => {
   }
 };
 
-export const fetchClusterHealth = async () => {
+export const fetchClusterHealth = async (connection) => {
   try {
     // Ping the network to measure latency
     const start = Date.now();
@@ -138,9 +122,8 @@ export const fetchClusterHealth = async () => {
   }
 };
 
-export const fetchSolPrice = async () => {
+export const fetchSolPrice = async (connection) => {
   try {
-    // TODO: add decentralized network
     const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
     const data = await response.json();
     return data.solana.usd; // Extract SOL price in USD
@@ -150,7 +133,7 @@ export const fetchSolPrice = async () => {
   }
 };
 
-export const fetchFinalityTime = async () => {
+export const fetchFinalityTime = async (connection) => {
   try {
     // Get the current slot
     const currentSlot = await connection.getSlot("finalized");
@@ -177,5 +160,126 @@ export const fetchFinalityTime = async () => {
   } catch (error) {
     console.error("Error fetching finality time:", error);
     throw error;
+  }
+};
+
+export const fetchTransaction = async (id, connection) => {
+  if (!id || id.length !== 88) {  // Basic Solana signature length check
+    return { error: 'Invalid transaction signature format' };
+  }
+
+  try {
+    const tx = await connection.getTransaction(id, { 
+      commitment: 'confirmed' 
+    });
+    return tx || { error: 'Transaction not found' };
+  } catch (e) {
+    return { error: 'Invalid transaction signature' };
+  }
+};
+
+export const fetchWallet = async (publicKey, connection) => {
+  try {
+    if(!publicKey){
+      return {
+        error: 'Failed to fetch wallet data',
+        errorDetail: error.message
+      };
+    }
+
+    // Get all token accounts owned by the wallet address
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      new PublicKey(publicKey),
+      {
+        programId: TOKEN_PROGRAM_ID,
+      }
+    );
+
+    // Format the token data
+    const tokenBalances = tokenAccounts.value.map((account) => {
+      const parsedAccountData = account.account.data.parsed;
+      const mintAddress = parsedAccountData.info.mint;
+      const tokenBalance = parsedAccountData.info.tokenAmount;
+      
+      return {
+        mint: mintAddress,
+        balance: tokenBalance.uiAmount,
+        decimals: tokenBalance.decimals,
+        isAssociatedToken: account.pubkey.toString() === account.account.owner.toString(),
+        tokenAccount: account.pubkey.toString()
+      };
+    });
+
+    // Get SOL balance
+    const solBalance = await connection.getBalance(publicKey);
+
+    return {
+      tokens: tokenBalances,
+      solBalance: solBalance / 1e9, // Convert lamports to SOL
+      address: publicKey.toString()
+    };
+
+  } catch (error) {
+    console.error('Error fetching wallet data:', error);
+    return {
+      error: 'Failed to fetch wallet data',
+      errorDetail: error.message
+    };
+  }
+};
+
+export const fetchWalletTx = async (publicKey, connection) => {
+  if (!publicKey) {
+    return {
+      error: "Public Key undefined or null",
+      errorDetail: "Please provide a valid public key.",
+    };
+  }
+
+  try {
+    
+    const pubKey = new PublicKey(publicKey);
+
+    // Fetch signatures for the last 5 transactions
+    const signatures = await connection.getSignaturesForAddress(
+      pubKey,
+      { limit: 5 }
+    );
+    
+
+    if (!signatures || signatures.length === 0) {
+      return {
+        error: "No transactions found",
+        transactions: [],
+      };
+    }
+
+    // Fetch detailed transaction information for each signature
+    const transactionPromises = signatures.map(async (signature) => {
+      const transactionDetails = await connection.getTransaction(
+        signature.signature,
+        { commitment: "confirmed" }
+      );
+      return {
+        signature: signature.signature,
+        slot: transactionDetails?.slot || null,
+        blockTime: transactionDetails?.blockTime || null,
+        fee: transactionDetails?.meta?.fee || null,
+        status: transactionDetails?.meta?.err ? "Failed" : "Success",
+        instructions: transactionDetails?.transaction.message.instructions || [],
+      };
+    });
+
+    const transactions = await Promise.all(transactionPromises);
+
+    return {
+      error: null,
+      transactions,
+    };
+  } catch (error) {
+    return {
+      error: "Failed to fetch transactions",
+      errorDetail: error.message,
+    };
   }
 };
